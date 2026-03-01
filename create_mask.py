@@ -1,30 +1,26 @@
 import numpy as np
+import pydicom as dicom
+import matplotlib.pyplot as plt
 import SimpleITK as sitk
 from pathlib import Path
 from skimage.draw import polygon
+from skimage.segmentation import find_boundaries
 import xml.etree.ElementTree as ET
-from tqdm import tqdm
-import json
+import os
+import glob as glob
 
-def FindPatientFolders(gated_dir):
-    gated_path = Path(gated_dir)
+HOME = Path.home()
+BASE_DATA_DIR = HOME / "cocacoronarycalciumandchestcts-2"
+GATED_DIR = BASE_DATA_DIR / "Gated_release_final"
+XML_DIR = GATED_DIR / "calcium_xml"
 
-    patient_ids = []
-    #iterate over folders in path
-    for f in gated_path.iterdir():
-        #make sure folder is in directory
-        if f.is_dir():
-            patient_ids.append(f.name)
-    
-    return sorted(patient_ids)
-
-def FindMatchingXML(patient_folder, xml_dir):
-    xml_path = Path(xml_dir)
+def get_xml(patient):
+    """Returns the XML file for a patient."""
+    return XML_DIR / f"{str(patient)}.xml" 
 
 
-    pass
-
-def XMLToDict(xml_file):
+def extract_calcium_dict(xml_file):
+    """Takes an XML annotation file and extracts the pixel points of calcium regions."""
     tree = ET.parse(xml_file)
     root = tree.getroot()
 
@@ -66,16 +62,13 @@ def XMLToDict(xml_file):
         for roi_dict in all_roi_dicts:
             roi_children = list(roi_dict)
 
-            name = 'Unknown'
             points_count = 0
             points = []
 
             for i in range(len(roi_children)):
                 current_elem = roi_children[i]
 
-                if current_elem.text == 'Name':
-                    name = roi_children[i+1].text
-                elif current_elem.text == 'NumberOfPoints':
+                if current_elem.text == 'NumberOfPoints':
                     points_count = int(roi_children[i+1].text)
 
                 elif current_elem.text == 'Point_px':
@@ -96,7 +89,7 @@ def XMLToDict(xml_file):
             
             if points_count > 0:
                 if len(points) > 0:
-                    data = {'name': name, 'points': points}
+                    data = {'slice': slice_num, 'points': points}
                     calcium_regions.append(data)
         
         if len(calcium_regions) > 0:
@@ -104,6 +97,41 @@ def XMLToDict(xml_file):
         
     return annotations
 
+def outline_calcium(patient_num, slice_num):
+    """Outlines calcium regions in red."""
+    patient_folder = GATED_DIR / "patient" / str(patient_num)
+    # have to glob because the name of the folder that holds .dcm files varies
+    patient_folder = list(patient_folder.glob("Pro*"))
+    calc_coords = extract_calcium_dict(get_xml(patient_num))
 
+    #from SimpleITK API Example (DicomSeriesReader/DicomSeriesReader.py)
+    reader = sitk.ImageSeriesReader() 
 
-print(XMLToDict('0.xml'))                 
+    #takes the "Pro_Gated..." folder that has the .dcm files an
+    dicom_names = reader.GetGDCMSeriesFileNames(str(patient_folder[0]))
+    reader.SetFileNames(dicom_names)
+    image = reader.Execute()
+    volume = sitk.GetArrayFromImage(image)
+    ct_slice = volume[slice_num]
+
+    #first setting an empty array for calcium mask
+    mask = np.zeros(ct_slice.shape, dtype=np.uint8) 
+    if slice_num in calc_coords:
+        calc_regions = calc_coords[slice_num]
+        for region in calc_regions:
+            points = region['points']
+            if len(points) < 3: #cannot draw a polygon without 3 pts.
+                continue
+            x = [pt[0] for pt in points]
+            y = [pt[1] for pt in points]
+            rr, cc = polygon(y, x, ct_slice.shape)
+            #changing mask to be "on" at calcification points
+            mask[rr, cc] = 1 
+
+    #converting image slice to support RGB and segmenting mask with red boundary
+    rgb = np.stack([ct_slice]*3, axis=-1)
+    boundary = find_boundaries(mask, mode='outer')
+    rgb[boundary] = [255, 0, 0]
+    plt.imshow(rgb, cmap = None)
+    plt.title(f"Patient {patient_num} Slice {slice_num}")
+    plt.show()
