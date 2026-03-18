@@ -1,6 +1,5 @@
 import numpy as np
 import pydicom as dicom
-import matplotlib.pyplot as plt
 import SimpleITK as sitk
 from pathlib import Path
 from skimage.draw import polygon
@@ -17,6 +16,23 @@ XML_DIR = GATED_DIR / "calcium_xml"
 def get_xml(patient):
     """Returns the XML file for a patient."""
     return XML_DIR / f"{str(patient)}.xml" 
+
+def load_ct_dicom(dicom_dir):
+    reader = sitk.ImageSeriesReader()
+    dicom_names = reader.GetGDCMSeriesFileNames(str(dicom_dir))
+    
+    if not dicom_names:
+        raise ValueError(f"No DICOM files in {dicom_dir}")
+    
+    reader.SetFileNames(dicom_names)
+    image = reader.Execute()
+    
+    ct_volume = sitk.GetArrayFromImage(image)
+    spacing = image.GetSpacing()
+    spacing = (spacing[2], spacing[1], spacing[0])
+    
+    return ct_volume, spacing
+
 
 
 def extract_calcium_dict(xml_file):
