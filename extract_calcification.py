@@ -7,6 +7,7 @@ from skimage.segmentation import find_boundaries
 import xml.etree.ElementTree as ET
 import os
 import glob as glob
+import matplotlib.pyplot as plt
 
 HOME = Path.home()
 BASE_DATA_DIR = HOME / "cocacoronarycalciumandchestcts-2"
