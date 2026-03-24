@@ -26,6 +26,19 @@ class CalciumDataset(Dataset):
 
         ct = np.clip(ct,-1000,3000)
         ct = (ct +1000)/4000.0
+
+        def pad_array(arr):
+            h, l, w = arr.shape
+            padding_h = (16 - h%16) % 16
+            padding_l = (16 - l%16) % 16
+            padding_w = (16 - w%16) % 16
+            padding = ((padding_h // 2, padding_h - padding_h // 2),
+                       (padding_l // 2, padding_l - padding_l // 2),
+                       (padding_w // 2, padding_w - padding_w // 2))
+            return np.pad(arr,padding,mode='constant',constant_values=0)
+
+        ct = pad_array(ct)
+        mask = pad_array(mask)
         ct = ct[np.newaxis,...]
         mask = mask[np.newaxis,...]
 
@@ -76,7 +89,7 @@ def validate(model, loader, metric,device):
     return dice
 
 def main():
-    data_dir = Path('training_data')
+    data_dir = Path('/kaggle/input/datasets/anilchintapalli/coca-calcium-segmentation/training_data')
     output_dir = Path('trained_model')
     output_dir.mkdir(exist_ok=True)
 
@@ -95,9 +108,9 @@ def main():
     all_pts = []
     for f in data_dir.iterdir():
         if f.is_dir():
-            all_pts.append(f)
+            all_pts.append(f.name)
 
-    all_pts = sorted(all_pts,key=int)
+    all_pts = sorted(all_pts, key=lambda x: int(x))
 
     #split 80/20 train test
     train_ind = int(0.8*len(all_pts))
@@ -168,9 +181,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
-        
-    
-
-
-    
