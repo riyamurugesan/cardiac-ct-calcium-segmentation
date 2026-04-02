@@ -124,7 +124,7 @@ def outline_calcium(patient_num, slice_num):
     #from SimpleITK API Example (DicomSeriesReader/DicomSeriesReader.py)
     reader = sitk.ImageSeriesReader() 
 
-    #takes the "Pro_Gated..." folder that has the .dcm files an
+    #takes the "Pro_Gated..." folder that has the .dcm files and converts the image into an array of points
     dicom_names = reader.GetGDCMSeriesFileNames(str(patient_folder[0]))
     reader.SetFileNames(dicom_names)
     image = reader.Execute()
