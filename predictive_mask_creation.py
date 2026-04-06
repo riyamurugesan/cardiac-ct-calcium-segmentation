@@ -1,15 +1,13 @@
 import numpy as np
 import torch
-from pathlib import Path
 from monai.networks.nets import UNet
 from monai.networks.layers import Norm
 
-MODEL_PATH = 'Output/best_model.pth'
-
 class CalciumPredictor:
-    def __init__(self,model_path,device):
-        #use gpu if available, cpu if not
-        if torch.cuda.is_available():
+    def __init__(self, model_path, device=None):
+        if device is not None:
+            self.device = torch.device(device)
+        elif torch.cuda.is_available():
             self.device = torch.device('cuda')
         else:
             self.device = torch.device('cpu')
@@ -69,5 +67,4 @@ class CalciumPredictor:
 
 
         
-
 

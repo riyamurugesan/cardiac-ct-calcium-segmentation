@@ -1,73 +1,111 @@
-import numpy as np
+import argparse
 from pathlib import Path
-from torch.utils.data import Dataset, DataLoader
-from monai.networks.nets import UNet
-from monai.networks.layers import Norm
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
 from monai.losses import DiceLoss
 from monai.metrics import DiceMetric
-import json
-import torch
-import matplotlib.pyplot as plt
+from monai.networks.layers import Norm
+from monai.networks.nets import UNet
+from torch.utils.data import DataLoader, Dataset
+
 
 class CalciumDataset(Dataset):
-    def __init__(self, data_dir,pt_ids):
+    def __init__(self, data_dir, pt_ids):
         self.data_dir = Path(data_dir)
         self.pt_ids = pt_ids
 
     def __len__(self):
         return len(self.pt_ids)
 
-    def __getitem__(self,ind):
+    def __getitem__(self, ind):
         pt_id = self.pt_ids[ind]
         pt_dir = self.data_dir / str(pt_id)
 
-        ct = np.load(pt_dir / 'ct_volume.npy')
-        mask = np.load(pt_dir / 'mask.npy')
+        ct = np.load(pt_dir / "ct_volume.npy")
+        mask = np.load(pt_dir / "mask.npy")
 
-        ct = np.clip(ct,-1000,3000)
-        ct = (ct +1000)/4000.0
+        ct = np.clip(ct, -1000, 3000)
+        ct = (ct + 1000) / 4000.0
 
         def pad_array(arr):
             h, l, w = arr.shape
-            padding_h = (16 - h%16) % 16
-            padding_l = (16 - l%16) % 16
-            padding_w = (16 - w%16) % 16
-            padding = ((padding_h // 2, padding_h - padding_h // 2),
-                       (padding_l // 2, padding_l - padding_l // 2),
-                       (padding_w // 2, padding_w - padding_w // 2))
-            return np.pad(arr,padding,mode='constant',constant_values=0)
+            padding_h = (16 - h % 16) % 16
+            padding_l = (16 - l % 16) % 16
+            padding_w = (16 - w % 16) % 16
+            padding = (
+                (padding_h // 2, padding_h - padding_h // 2),
+                (padding_l // 2, padding_l - padding_l // 2),
+                (padding_w // 2, padding_w - padding_w // 2),
+            )
+            return np.pad(arr, padding, mode="constant", constant_values=0)
 
         ct = pad_array(ct)
         mask = pad_array(mask)
-        ct = ct[np.newaxis,...]
-        mask = mask[np.newaxis,...]
+        ct = ct[np.newaxis, ...]
+        mask = mask[np.newaxis, ...]
 
         ct = torch.from_numpy(ct).float()
         mask = torch.from_numpy(mask).float()
         return ct, mask
-    
-def training_epoch(model,loader,optimizer,loss_func, device):
-    model.train()
-    epoch_loss = 0
 
-    for ct,mask in loader:
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train a 3D UNet for calcium segmentation.")
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        required=True,
+        help="Directory containing per-patient training data folders.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Directory where model checkpoints and plots will be saved.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="Training batch size.",
+    )
+    parser.add_argument(
+        "--num-epochs",
+        type=int,
+        default=50,
+        help="Number of training epochs.",
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=1e-4,
+        help="Learning rate.",
+    )
+    return parser.parse_args()
+
+
+def training_epoch(model, loader, optimizer, loss_func, device):
+    model.train()
+    epoch_loss = 0.0
+
+    for ct, mask in loader:
         ct = ct.to(device)
         mask = mask.to(device)
-        # go forward and get loss
+
         optimizer.zero_grad()
         output = model(ct)
-        loss = loss_func(output,mask)
-        # go backwards
+        loss = loss_func(output, mask)
         loss.backward()
         optimizer.step()
 
-        #add loss to epoch loss
-        epoch_loss = epoch_loss + loss.item()
+        epoch_loss += loss.item()
 
-    avg_loss = epoch_loss / len(loader)
-    return avg_loss
+    return epoch_loss / len(loader)
 
-def validate(model, loader, metric,device):
+
+def validate(model, loader, metric, device):
     model.eval()
     metric.reset()
 
@@ -76,108 +114,108 @@ def validate(model, loader, metric,device):
             ct = ct.to(device)
             mask = mask.to(device)
 
-            #forward
             output = model(ct)
-
-            #activation and conversion to 0/1 state (calcium or no calcium)
             output = torch.sigmoid(output)
             output = (output > 0.5).float()
 
-            metric(y_pred = output, y=mask)
+            metric(y_pred=output, y=mask)
+
     dice = metric.aggregate().item()
     metric.reset()
     return dice
 
-def main():
-    data_dir = Path('/kaggle/input/datasets/anilchintapalli/coca-calcium-segmentation/training_data')
-    output_dir = Path('trained_model')
-    output_dir.mkdir(exist_ok=True)
 
-    #use gpu if available, cpu if not
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-    else:
-        device = torch.device('cpu')
-    
-    #set hyperparameters
-    batch_size = 1
-    num_epochs = 50 # go thru training set 50 times
-    step_size = 0.0001
+def load_patient_ids(data_dir: Path):
+    patient_ids = [f.name for f in data_dir.iterdir() if f.is_dir()]
+    patient_ids = sorted(patient_ids, key=lambda x: int(x))
+    if len(patient_ids) < 2:
+        raise ValueError("Need at least 2 patient folders for train/validation split.")
+    return patient_ids
 
-    
-    all_pts = []
-    for f in data_dir.iterdir():
-        if f.is_dir():
-            all_pts.append(f.name)
 
-    all_pts = sorted(all_pts, key=lambda x: int(x))
+def train_model(data_dir: Path, output_dir: Path, batch_size: int, num_epochs: int, lr: float):
+    if not data_dir.is_dir():
+        raise FileNotFoundError(f"Missing training data directory: {data_dir}")
 
-    #split 80/20 train test
-    train_ind = int(0.8*len(all_pts))
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    all_pts = load_patient_ids(data_dir)
+    train_ind = max(1, int(0.8 * len(all_pts)))
+    train_ind = min(train_ind, len(all_pts) - 1)
     training_pts = all_pts[:train_ind]
     val_pts = all_pts[train_ind:]
-    #create datasets
-    training_data = CalciumDataset(data_dir,training_pts)
-    val_data = CalciumDataset(data_dir,val_pts)
 
-    # create data loaders
-    training_loader = DataLoader(training_data,batch_size=batch_size,shuffle=True)
-    val_loader = DataLoader(val_data,batch_size=batch_size,shuffle=False)
+    training_data = CalciumDataset(data_dir, training_pts)
+    val_data = CalciumDataset(data_dir, val_pts)
 
-    # Create model! 
-    model = UNet(spatial_dims=3,in_channels=1,out_channels=1,
-                 channels=(16,32,64,128,256),strides=(2,2,2,2),
-                 num_res_units=2, norm=Norm.BATCH,).to(device)
-    
-    num_params = 0
-    for p in model.parameters():
-        num_params += p.numel()
-    
+    training_loader = DataLoader(training_data, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
+
+    model = UNet(
+        spatial_dims=3,
+        in_channels=1,
+        out_channels=1,
+        channels=(16, 32, 64, 128, 256),
+        strides=(2, 2, 2, 2),
+        num_res_units=2,
+        norm=Norm.BATCH,
+    ).to(device)
+
     loss_func = DiceLoss(sigmoid=True)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    dice_metric = DiceMetric(include_background=True, reduction="mean")
 
-    optimizer = torch.optim.Adam(model.parameters(),lr=step_size)
-    dice_metric = DiceMetric(include_background=True,reduction="mean")
-
-    # training loop
     best_dice = 0.0
-    hist = {'training_loss': [], 'val_dice': []}
+    hist = {"training_loss": [], "val_dice": []}
 
     for epoch in range(num_epochs):
-        training_loss = training_epoch(model,training_loader,optimizer,loss_func,device)
+        training_loss = training_epoch(model, training_loader, optimizer, loss_func, device)
+        val_dice = validate(model, val_loader, dice_metric, device)
 
-        val_dice = validate(model,val_loader,dice_metric,device)
+        hist["training_loss"].append(training_loss)
+        hist["val_dice"].append(val_dice)
 
-        hist['training_loss'].append(training_loss)
-        hist['val_dice'].append(val_dice)
-        # save model with new best dice
         if val_dice > best_dice:
             best_dice = val_dice
-            torch.save(model.state_dict(),output_dir / 'best_model.pth')
-        
-    # save final model
-    torch.save(model.state_dict(),output_dir / 'final_model.pth')
+            torch.save(model.state_dict(), output_dir / "best_model.pth")
 
-    # plot loss by epoch and dice by epoch
+        print(
+            f"Epoch {epoch + 1}/{num_epochs} "
+            f"train_loss={training_loss:.4f} val_dice={val_dice:.4f}"
+        )
+
+    torch.save(model.state_dict(), output_dir / "final_model.pth")
+
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-        
-    # Loss
-    ax1.plot(hist['training_loss'])
-    ax1.set_title('Training Loss')
-    ax1.set_xlabel('Epoch')
-    ax1.set_ylabel('Dice Loss')
+    ax1.plot(hist["training_loss"])
+    ax1.set_title("Training Loss")
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("Dice Loss")
     ax1.grid(True)
-    
-    # Dice
-    ax2.plot(hist['val_dice'])
-    ax2.set_title('Validation Dice Score')
-    ax2.set_xlabel('Epoch')
-    ax2.set_ylabel('Dice')
+
+    ax2.plot(hist["val_dice"])
+    ax2.set_title("Validation Dice Score")
+    ax2.set_xlabel("Epoch")
+    ax2.set_ylabel("Dice")
     ax2.grid(True)
-    
+
     plt.tight_layout()
-    plt.savefig(output_dir / 'training_curves.png', dpi=150, bbox_inches='tight')
-    
-    plt.show()
+    plt.savefig(output_dir / "training_curves.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def main():
+    args = parse_args()
+    train_model(
+        data_dir=args.data_dir,
+        output_dir=args.output_dir,
+        batch_size=args.batch_size,
+        num_epochs=args.num_epochs,
+        lr=args.lr,
+    )
+
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,8 @@
+numpy
+matplotlib
+pydicom
+SimpleITK
+scikit-image
+trimesh
+torch
+monai
