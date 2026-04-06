@@ -1,4 +1,4 @@
-# cardi_repo
+# CalciSeg
 
 Anil Chintapalli, Riya Murugesan and Haoze Li  
 Cardiovascular Modeling and Simulation Laboratory  
